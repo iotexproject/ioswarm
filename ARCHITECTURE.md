@@ -231,3 +231,134 @@ Agent net profit/month:  ~5,084 IOTX
 ```
 
 High-accuracy agents earn a 1.2x bonus (20% more than average). Even the lowest-performing qualifying agent is profitable at ~5,000 IOTX/month vs ~100 IOTX VPS cost.
+
+---
+
+## IOSwarm vs Ethereum PBS — Gap Analysis
+
+### What Phase 4 Achieves
+
+| PBS Feature | Ethereum | IOSwarm (Phase 4) |
+|-------------|----------|-------------------|
+| Execution separation | Builder constructs block | Agent executes EVM, returns state diffs |
+| Result verification | Relay validates block | Shadow mode compares agent vs delegate |
+| Task dispatch | Builder marketplace via relay | Coordinator dispatches via gRPC |
+| Reward distribution | Builder bids for block space | Epoch-based proportional rewards |
+
+### What's Still Missing
+
+| Feature | Ethereum PBS | IOSwarm Status | Priority |
+|---------|-------------|----------------|----------|
+| State root computation | Builder produces complete payload with state root | Agent returns diffs, delegate still does trie ops | HIGH — needs Verkle Tree (Phase 6) |
+| MEV auction | Builders bid for block construction rights | Not needed — IoTeX ~10-30 TPS, minimal MEV | LOW |
+| Commitment scheme | Proposer signs blinded block header | No cryptographic commitment | MEDIUM |
+| Slashing / auto-kick | Equivocation → slash 32 ETH | Manual API key revocation only | HIGH — see below |
+| Censorship resistance | Inclusion lists (ePBS) | Not needed — delegate self-selects txs | LOW |
+| Multi-builder competition | Multiple builders compete per slot | Agents cooperate (split workload) | LOW |
+
+### Conclusion
+
+Phase 4 achieves the most valuable PBS feature: **execution separation**. Missing pieces are either IoTeX-irrelevant (MEV, inclusion lists) or future work (Verkle, slashing).
+
+---
+
+## Agent Accountability: Auto-Kick & Slashing Design
+
+### Problem
+
+Currently, if an agent misbehaves (returns wrong results, goes slow, acts selectively), the only recourse is manual API key revocation via the portal. We need automated detection and punishment.
+
+### Reference: How Ethereum/Cosmos Handle This
+
+**Ethereum slashing** (2 offenses only):
+- Proposer equivocation: signing two blocks for same slot → lose 1/32 of stake immediately + correlation penalty up to 100% if coordinated
+- Attester equivocation: conflicting votes → same penalties
+- Whistleblower who submits proof gets 1/512 of slashed stake as reward
+
+**Cosmos slashing** (simpler model):
+- Double signing → 5% slash + permanent jail ("tombstoning")
+- Downtime (missing >50% of blocks in a window) → 0.01% slash + temporary jail
+- Sliding window (10,000 blocks) tracks liveness
+
+**ePBS** (EIP-7732, not yet deployed):
+- Builder fails to reveal payload → forfeits bid (unconditional payment to proposer)
+- No traditional slashing — relies on economic incentives
+- Payload Timeliness Committee (PTC) votes on whether payload was delivered on time
+
+### IOSwarm Auto-Kick Design
+
+#### Detection Mechanisms
+
+1. **Shadow mode comparison** (already exists): Agent EVM results vs delegate execution. Wrong result = hard fault.
+2. **Challenge tasks** (canary): 1-5% of tasks have pre-computed correct answers. Failed challenge = immediate flag. Low overhead, high confidence.
+3. **Cross-validation**: Same task sent to N agents (e.g., 3). If 2/3 agree and 1 disagrees, outlier flagged. More expensive but robust.
+4. **Latency monitoring**: Track P50/P95 per agent vs population median. Agent >3x slower = soft fault.
+5. **Completion rate**: Accept-vs-complete ratio. Population average 95%, agent at 60% = selective execution.
+6. **Heartbeat liveness**: 3 missed heartbeats = offline. Remove from active pool.
+
+#### Progressive Punishment (4 Tiers)
+
+```
+Tier 0 — MONITORING (baseline)
+  Track: accuracy, latency, completion rate, heartbeat
+  Rolling windows: 1-hour and 24-hour
+  No action, just data collection
+
+Tier 1 — WARNING
+  Trigger: 3 soft faults in 1h OR 1 failed challenge task
+  Action: reduce task allocation priority, notify operator
+  Auto-clear: 6 hours clean → back to Tier 0
+  Escalation: 3 warnings in 24h → Tier 2
+
+Tier 2 — REWARD REDUCTION
+  Trigger: escalation from Tier 1 OR accuracy < 90% sustained 1h
+  Action: 50% reward cut, max 1 concurrent task, 10% challenge rate
+  Auto-clear: 24h clean → back to Tier 1
+  Escalation: any hard fault OR 48h without improvement → Tier 3
+
+Tier 3 — SUSPENSION (auto-kick)
+  Trigger: escalation from Tier 2 OR 1 hard fault (provably wrong EVM result)
+  Action: remove from active pool, stop tasks, freeze rewards
+  Re-entry: after cooldown (1h), agent re-registers + passes health check
+  Escalation: 3 suspensions in 7 days → Tier 4
+
+Tier 4 — PERMANENT BAN
+  Trigger: escalation from Tier 3 OR proven malicious behavior
+  Action: revoke API key, ban agent identity, forfeit frozen rewards
+  Appeal: manual review by delegate operator
+```
+
+#### Practical Thresholds
+
+| Metric | Warning (Tier 1) | Suspension (Tier 3) |
+|--------|-----------------|---------------------|
+| EVM accuracy (shadow match) | <95% in 1h | <80% in 1h |
+| Challenge task failure | 1 failure | 2 failures in 24h |
+| Response latency vs median | >2x P95 | >5x P95 |
+| Task completion rate | <85% | <60% |
+| Heartbeat misses (consecutive) | 3 | 5 |
+
+#### Implementation in Coordinator
+
+New component: `AgentAccountability` in coordinator:
+- Per-agent state machine tracking current tier + fault log (circular buffer)
+- Runs alongside existing `RewardDistributor` and `ShadowComparator`
+- Challenge task injection in `pollAndDispatch()` (1-5% of tasks)
+- Tier transitions logged immutably for auditability
+- Exposed via SwarmAPI: `GET /swarm/agents/{id}/accountability`
+
+#### Correlation Penalty (from Polkadot)
+
+If multiple agents from the same operator misbehave simultaneously:
+```
+penalty_multiplier = min(3 × (concurrent_offenders / total_agents), 1.0)
+```
+Individual bug = mild penalty. Coordinated attack = maximum penalty.
+
+#### Future: On-Chain Staking
+
+For full economic security (not needed for MVP):
+- Agents stake IOTX to participate (e.g., 1000 IOTX)
+- Tier 4 slashes stake (10-100% depending on severity)
+- Slashed funds go to delegate or burn
+- Staking contract: `IOSwarmStaking.sol` on IoTeX mainnet
