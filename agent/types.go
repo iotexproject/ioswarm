@@ -29,6 +29,35 @@ type taskBatch struct {
 	Timestamp uint64         `json:"timestamp"`
 }
 
+type blockCtx struct {
+	Timestamp uint64 `json:"timestamp"`
+	GasLimit  uint64 `json:"gas_limit"`
+	BaseFee   string `json:"base_fee"`
+	Coinbase  string `json:"coinbase"`
+	Number    uint64 `json:"number"`
+}
+
+type evmTx struct {
+	To       string `json:"to,omitempty"`
+	Value    string `json:"value"`
+	Data     []byte `json:"data,omitempty"`
+	GasLimit uint64 `json:"gas_limit"`
+	GasPrice string `json:"gas_price"`
+}
+
+type stateChange struct {
+	Address  string `json:"address"`
+	Slot     string `json:"slot"`
+	OldValue string `json:"old_value"`
+	NewValue string `json:"new_value"`
+}
+
+type logEntry struct {
+	Address string   `json:"address"`
+	Topics  []string `json:"topics"`
+	Data    []byte   `json:"data"`
+}
+
 type taskPackage struct {
 	TaskID      uint32           `json:"task_id"`
 	TxRaw       []byte           `json:"tx_raw"`
@@ -36,6 +65,12 @@ type taskPackage struct {
 	Sender      *accountSnapshot `json:"sender"`
 	Receiver    *accountSnapshot `json:"receiver"`
 	BlockHeight uint64           `json:"block_height"`
+
+	// L3 EVM execution fields
+	BlockContext *blockCtx                    `json:"block_context,omitempty"`
+	ContractCode map[string][]byte            `json:"contract_code,omitempty"`
+	StorageSlots map[string]map[string]string `json:"storage_slots,omitempty"`
+	EvmTx        *evmTx                       `json:"evm_tx,omitempty"`
 }
 
 type accountSnapshot struct {
@@ -51,6 +86,13 @@ type taskResult struct {
 	RejectReason string `json:"reject_reason,omitempty"`
 	GasEstimate  uint64 `json:"gas_estimate"`
 	LatencyUs    uint64 `json:"latency_us"`
+
+	// L3 EVM execution results
+	GasUsed      uint64         `json:"gas_used,omitempty"`
+	ReturnData   []byte         `json:"return_data,omitempty"`
+	StateChanges []*stateChange `json:"state_changes,omitempty"`
+	Logs         []*logEntry    `json:"logs,omitempty"`
+	ExecError    string         `json:"exec_error,omitempty"`
 }
 
 type batchResult struct {

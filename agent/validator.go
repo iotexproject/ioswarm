@@ -15,6 +15,7 @@ type ValidationResult struct {
 	GasEstimate  uint64
 	Note         string
 	LatencyUs    uint64
+	evmResult    *evmResult // populated by L3 EVM execution
 }
 
 // validateTask runs the appropriate validation level on a task.
@@ -43,6 +44,16 @@ func validateTask(task *taskPackage, level string) *taskResult {
 	if res.Note != "" && res.RejectReason == "" {
 		r.RejectReason = res.Note
 	}
+
+	// Propagate EVM execution results (L3)
+	if res.evmResult != nil {
+		r.GasUsed = res.evmResult.GasUsed
+		r.ReturnData = res.evmResult.ReturnData
+		r.StateChanges = res.evmResult.StateChanges
+		r.Logs = res.evmResult.Logs
+		r.ExecError = res.evmResult.Error
+	}
+
 	return r
 }
 
@@ -175,11 +186,33 @@ func validateL2(task *taskPackage) ValidationResult {
 	}
 }
 
-// validateL3 is a stub that returns L2 results with an informational note.
+// validateL3 performs full EVM execution (includes L1 + L2 checks).
 func validateL3(task *taskPackage) ValidationResult {
 	l2 := validateL2(task)
-	l2.Note = "L3 EVM execution not yet implemented"
-	return l2
+	if !l2.Valid {
+		return l2
+	}
+
+	// If no EVM tx data, fall back to L2 result
+	if task.EvmTx == nil {
+		l2.Note = "no EVM tx data, L2 result only"
+		return l2
+	}
+
+	// Execute EVM
+	result := executeEVM(task)
+
+	vr := ValidationResult{
+		Valid:       result.Success,
+		GasEstimate: result.GasUsed,
+	}
+	if !result.Success {
+		vr.RejectReason = result.Error
+	}
+
+	// Store EVM results for inclusion in taskResult
+	vr.evmResult = result
+	return vr
 }
 
 // extractTxNonce reads the nonce from the first 8 bytes of TxRaw (big-endian uint64).

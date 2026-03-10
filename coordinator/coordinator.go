@@ -210,6 +210,11 @@ func (c *Coordinator) pollAndDispatch() {
 			task.Receiver = snap
 		}
 
+		// L3: attach EVM execution data
+		if level == pb.TaskLevel_L3_FULL_EXECUTE {
+			c.enrichL3Task(task, tx, blockHeight)
+		}
+
 		tasks = append(tasks, task)
 	}
 
@@ -361,6 +366,36 @@ func (c *Coordinator) consumePayout(agentID string) *pb.PayoutInfo {
 		return nil
 	}
 	return val.(*pb.PayoutInfo)
+}
+
+// enrichL3Task attaches EVM execution data to an L3 task.
+// It fetches contract bytecode, storage, and builds the BlockContext + EvmTx.
+func (c *Coordinator) enrichL3Task(task *pb.TaskPackage, tx *PendingTx, blockHeight uint64) {
+	// Build EvmTx from PendingTx fields
+	task.EvmTx = &pb.EvmTx{
+		To:       tx.To,
+		Value:    tx.Amount,
+		Data:     tx.Data,
+		GasLimit: tx.GasLimit,
+		GasPrice: tx.GasPrice,
+	}
+
+	// Build BlockContext
+	task.BlockContext = &pb.BlockCtx{
+		Number:    blockHeight,
+		Timestamp: uint64(time.Now().Unix()),
+		GasLimit:  30_000_000,
+		BaseFee:   "0",
+		Coinbase:  c.cfg.DelegateAddress,
+	}
+
+	// Fetch contract bytecode for receiver (if it has CodeHash)
+	if task.Receiver != nil && len(task.Receiver.CodeHash) > 0 && tx.To != "" {
+		codes := c.prefetcher.PrefetchCode([]string{tx.To})
+		if len(codes) > 0 {
+			task.ContractCode = codes
+		}
+	}
 }
 
 func parseTaskLevel(s string) pb.TaskLevel {

@@ -28,6 +28,9 @@ func (m *mockStateReader) AccountState(address string) (*pb.AccountSnapshot, err
 	}, nil
 }
 
+func (m *mockStateReader) GetCode(address string) ([]byte, error)           { return nil, nil }
+func (m *mockStateReader) GetStorageAt(address, slot string) (string, error) { return "", nil }
+
 func TestPrefetchBasic(t *testing.T) {
 	sr := &mockStateReader{
 		accounts: map[string]*pb.AccountSnapshot{
@@ -138,3 +141,6 @@ func (c *countingStateReader) AccountState(address string) (*pb.AccountSnapshot,
 	*c.count++
 	return c.inner.AccountState(address)
 }
+
+func (c *countingStateReader) GetCode(address string) ([]byte, error)           { return nil, nil }
+func (c *countingStateReader) GetStorageAt(address, slot string) (string, error) { return "", nil }

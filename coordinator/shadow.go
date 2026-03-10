@@ -34,6 +34,12 @@ type ShadowStats struct {
 	TotalMismatched uint64
 	FalsePositives  uint64 // agent said valid, actual invalid
 	FalseNegatives  uint64 // agent said invalid, actual valid
+
+	// EVM-specific shadow stats (L3)
+	EVMGasMatches      uint64
+	EVMGasMismatches   uint64
+	EVMStateMatches    uint64
+	EVMStateMismatches uint64
 }
 
 // NewShadowComparator creates a new shadow comparator.
@@ -121,6 +127,71 @@ func (s *ShadowComparator) Stats() ShadowStats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.stats
+}
+
+// EVMActualResult holds the reference EVM execution result for shadow comparison.
+type EVMActualResult struct {
+	TaskID       uint32
+	GasUsed      uint64
+	StateChanges []*pb.StateChange
+	ExecError    string
+}
+
+// CompareEVMResults compares agent EVM results against reference results.
+func (s *ShadowComparator) CompareEVMResults(agentResults []*pb.TaskResult, actualResults map[uint32]*EVMActualResult, blockHeight uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, ar := range agentResults {
+		actual, ok := actualResults[ar.TaskID]
+		if !ok || ar.GasUsed == 0 {
+			continue // not an L3 result or no reference
+		}
+
+		// Compare gas used
+		if ar.GasUsed == actual.GasUsed {
+			s.stats.EVMGasMatches++
+		} else {
+			s.stats.EVMGasMismatches++
+			s.logger.Warn("EVM gas mismatch",
+				zap.Uint32("task_id", ar.TaskID),
+				zap.Uint64("agent_gas", ar.GasUsed),
+				zap.Uint64("actual_gas", actual.GasUsed),
+				zap.Uint64("block", blockHeight))
+		}
+
+		// Compare state changes
+		if stateChangesMatch(ar.StateChanges, actual.StateChanges) {
+			s.stats.EVMStateMatches++
+		} else {
+			s.stats.EVMStateMismatches++
+			s.logger.Warn("EVM state mismatch",
+				zap.Uint32("task_id", ar.TaskID),
+				zap.Int("agent_changes", len(ar.StateChanges)),
+				zap.Int("actual_changes", len(actual.StateChanges)),
+				zap.Uint64("block", blockHeight))
+		}
+	}
+}
+
+// stateChangesMatch compares two sets of state changes for equality.
+func stateChangesMatch(a, b []*pb.StateChange) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	// Build map from a
+	type key struct{ addr, slot string }
+	aMap := make(map[key]string, len(a))
+	for _, sc := range a {
+		aMap[key{sc.Address, sc.Slot}] = sc.NewValue
+	}
+	// Check b matches
+	for _, sc := range b {
+		if aMap[key{sc.Address, sc.Slot}] != sc.NewValue {
+			return false
+		}
+	}
+	return true
 }
 
 // ResetStats resets the statistics counters.

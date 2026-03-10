@@ -279,7 +279,7 @@ func TestValidateL3Stub(t *testing.T) {
 	if !res.Valid {
 		t.Fatalf("expected valid, got: %s", res.RejectReason)
 	}
-	if res.Note != "L3 EVM execution not yet implemented" {
+	if res.Note != "no EVM tx data, L2 result only" {
 		t.Fatalf("unexpected note: %s", res.Note)
 	}
 }
@@ -325,9 +325,9 @@ func TestValidateTaskIntegration(t *testing.T) {
 	if !r.Valid {
 		t.Fatalf("L3 failed: %s", r.RejectReason)
 	}
-	// L3 stub note is in RejectReason field when Valid is true
-	if r.RejectReason != "L3 EVM execution not yet implemented" {
-		t.Fatalf("expected L3 stub note, got: %s", r.RejectReason)
+	// L3 with no EvmTx falls back to L2 with note
+	if r.RejectReason != "no EVM tx data, L2 result only" {
+		t.Fatalf("expected L3 fallback note, got: %s", r.RejectReason)
 	}
 }
 

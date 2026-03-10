@@ -20,6 +20,39 @@ type AccountSnapshot struct {
 	CodeHash []byte `json:"code_hash,omitempty"`
 }
 
+// BlockCtx carries block-level context needed for EVM execution.
+type BlockCtx struct {
+	Timestamp uint64 `json:"timestamp"`
+	GasLimit  uint64 `json:"gas_limit"`
+	BaseFee   string `json:"base_fee"`  // big.Int as string
+	Coinbase  string `json:"coinbase"`  // block producer address
+	Number    uint64 `json:"number"`
+}
+
+// EvmTx carries structured EVM transaction fields.
+type EvmTx struct {
+	To       string `json:"to,omitempty"` // empty = contract creation
+	Value    string `json:"value"`        // big.Int as string
+	Data     []byte `json:"data,omitempty"`
+	GasLimit uint64 `json:"gas_limit"`
+	GasPrice string `json:"gas_price"` // big.Int as string
+}
+
+// StateChange records a single storage mutation during EVM execution.
+type StateChange struct {
+	Address  string `json:"address"`
+	Slot     string `json:"slot"`      // hex
+	OldValue string `json:"old_value"` // hex
+	NewValue string `json:"new_value"` // hex
+}
+
+// LogEntry records a single EVM log emitted during execution.
+type LogEntry struct {
+	Address string   `json:"address"`
+	Topics  []string `json:"topics"`
+	Data    []byte   `json:"data"`
+}
+
 // TaskPackage is a single transaction validation task.
 type TaskPackage struct {
 	TaskID      uint32           `json:"task_id"`
@@ -28,6 +61,12 @@ type TaskPackage struct {
 	Sender      *AccountSnapshot `json:"sender"`
 	Receiver    *AccountSnapshot `json:"receiver"`
 	BlockHeight uint64           `json:"block_height"`
+
+	// L3 EVM execution fields
+	BlockContext *BlockCtx            `json:"block_context,omitempty"`
+	ContractCode map[string][]byte    `json:"contract_code,omitempty"`   // address → bytecode
+	StorageSlots map[string]map[string]string `json:"storage_slots,omitempty"` // address → slot → value (hex)
+	EvmTx        *EvmTx               `json:"evm_tx,omitempty"`
 }
 
 // TaskBatch is a batch of tasks sent to an agent.
@@ -44,6 +83,13 @@ type TaskResult struct {
 	RejectReason string `json:"reject_reason,omitempty"`
 	GasEstimate  uint64 `json:"gas_estimate"`
 	LatencyUs    uint64 `json:"latency_us"`
+
+	// L3 EVM execution results
+	GasUsed      uint64         `json:"gas_used,omitempty"`
+	ReturnData   []byte         `json:"return_data,omitempty"`
+	StateChanges []*StateChange `json:"state_changes,omitempty"`
+	Logs         []*LogEntry    `json:"logs,omitempty"`
+	ExecError    string         `json:"exec_error,omitempty"`
 }
 
 // BatchResult is a batch of results from an agent.

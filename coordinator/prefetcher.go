@@ -24,6 +24,8 @@ type PendingTx struct {
 // In production, this wraps iotex-core's StateFactory.
 type StateReader interface {
 	AccountState(address string) (*pb.AccountSnapshot, error)
+	GetCode(address string) ([]byte, error)           // contract bytecode
+	GetStorageAt(address, slot string) (string, error) // storage slot value (hex)
 }
 
 // ActPoolReader is the interface for reading pending transactions.
@@ -114,6 +116,61 @@ func (p *Prefetcher) Prefetch(txs []*PendingTx) map[string]*pb.AccountSnapshot {
 	}
 
 	return result
+}
+
+// PrefetchCode fetches contract bytecode for the given addresses.
+func (p *Prefetcher) PrefetchCode(addresses []string) map[string][]byte {
+	codes := make(map[string][]byte, len(addresses))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, addr := range addresses {
+		wg.Add(1)
+		go func(a string) {
+			defer wg.Done()
+			code, err := p.stateReader.GetCode(a)
+			if err != nil {
+				p.logger.Warn("failed to get code",
+					zap.String("address", a),
+					zap.Error(err))
+				return
+			}
+			if len(code) > 0 {
+				mu.Lock()
+				codes[a] = code
+				mu.Unlock()
+			}
+		}(addr)
+	}
+	wg.Wait()
+	return codes
+}
+
+// PrefetchStorage fetches storage slots for a contract address.
+func (p *Prefetcher) PrefetchStorage(address string, slots []string) map[string]string {
+	storage := make(map[string]string, len(slots))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, slot := range slots {
+		wg.Add(1)
+		go func(s string) {
+			defer wg.Done()
+			val, err := p.stateReader.GetStorageAt(address, s)
+			if err != nil {
+				p.logger.Warn("failed to get storage",
+					zap.String("address", address),
+					zap.String("slot", s),
+					zap.Error(err))
+				return
+			}
+			mu.Lock()
+			storage[s] = val
+			mu.Unlock()
+		}(slot)
+	}
+	wg.Wait()
+	return storage
 }
 
 // InvalidateCache clears cached state (call on new block).
