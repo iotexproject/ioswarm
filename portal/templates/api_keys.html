@@ -1,0 +1,65 @@
+{{template "head" .}}
+{{template "nav" .}}
+
+<h1>API Keys</h1>
+
+{{if .NewKey}}
+<div class="success">
+  <strong>New key created!</strong> Copy it now &mdash; it won't be shown again in full.
+  <div class="key-display" style="margin-top:0.5rem;" onclick="navigator.clipboard.writeText(this.textContent.trim()).then(()=>this.style.borderColor='#00cc6a')">{{.NewKey}}</div>
+  <small style="color:#888">Click to copy</small>
+</div>
+{{end}}
+
+<div class="card">
+  <h2>Create New Key</h2>
+  <form method="POST" action="/api-keys/create" style="display:flex; gap:0.5rem; align-items:flex-end; flex-wrap:wrap;">
+    <div style="flex:1; min-width:200px;">
+      <label for="label">Label (optional)</label>
+      <input type="text" id="label" name="label" placeholder="e.g. my-validator" style="margin-bottom:0;">
+    </div>
+    <div style="flex:1; min-width:200px;">
+      <label for="agent_id">Agent ID (auto-generated if empty)</label>
+      <input type="text" id="agent_id" name="agent_id" placeholder="e.g. lobster-001" style="margin-bottom:0;">
+    </div>
+    <button type="submit" style="height:38px;">+ Add Key</button>
+  </form>
+</div>
+
+{{if .Keys}}
+<div class="card">
+  <table>
+    <tr>
+      <th>Agent ID</th>
+      <th>Label</th>
+      <th>Key (prefix)</th>
+      <th>Created</th>
+      <th></th>
+    </tr>
+    {{range .Keys}}
+    <tr{{if .Revoked}} class="revoked"{{end}}>
+      <td class="mono">{{.AgentID}}</td>
+      <td>{{if .Label}}{{.Label}}{{else}}<span style="color:#444">—</span>{{end}}</td>
+      <td class="mono">{{if gt (len .APIKey) 16}}{{slice .APIKey 0 16}}...{{else}}{{.APIKey}}{{end}}</td>
+      <td style="color:#666;">{{.CreatedAt.Format "2006-01-02"}}</td>
+      <td>
+        {{if not .Revoked}}
+        <form method="POST" action="/api-keys/revoke" style="margin:0; display:inline;">
+          <input type="hidden" name="key_id" value="{{.ID}}">
+          <button type="submit" class="btn-danger" onclick="return confirm('Revoke this key?')">Revoke</button>
+        </form>
+        {{else}}
+        <span style="color:#666;">revoked</span>
+        {{end}}
+      </td>
+    </tr>
+    {{end}}
+  </table>
+</div>
+{{else}}
+<div class="card" style="color:#666; text-align:center; padding:2rem;">
+  No API keys yet. Create one above.
+</div>
+{{end}}
+
+{{template "foot" .}}

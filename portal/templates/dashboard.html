@@ -1,0 +1,33 @@
+{{template "head" .}}
+{{template "nav" .}}
+
+<h1>Dashboard</h1>
+
+<div class="grid">
+  <div class="card">
+    <div class="stat-label">Active API Keys</div>
+    <div class="stat">{{.KeyCount}}</div>
+  </div>
+  <div class="card">
+    <div class="stat-label">Quick Actions</div>
+    <br>
+    <a href="/api-keys" class="btn">Manage Keys</a>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Getting Started</h2>
+  <ol style="padding-left: 1.5rem; margin-top: 0.5rem; color: #888;">
+    <li>Create an API key on the <a href="/api-keys">API Keys</a> page</li>
+    <li>Copy the agent ID and API key</li>
+    <li>Run your agent:
+      <pre style="background:#1a1a1a; padding:0.5rem; margin:0.5rem 0; border-radius:4px; overflow-x:auto; color:#00ff88;">ioswarm-agent \
+  --coordinator=coordinator:14689 \
+  --agent-id=YOUR_AGENT_ID \
+  --api-key=YOUR_API_KEY \
+  --level=L2</pre>
+    </li>
+  </ol>
+</div>
+
+{{template "foot" .}}

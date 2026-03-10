@@ -1,0 +1,20 @@
+# Compiled binaries
+*.exe
+*.test
+*.out
+ioswarm-agent
+ioswarm-portal
+sim
+testcoord
+
+# Database
+*.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

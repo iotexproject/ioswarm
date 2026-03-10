@@ -1,0 +1,21 @@
+{{template "head" .}}
+
+<h1>Create Account</h1>
+
+{{if .Error}}<div class="error">{{.Error}}</div>{{end}}
+
+<div class="card">
+  <form method="POST" action="/register">
+    <label for="email">Email</label>
+    <input type="email" id="email" name="email" required autofocus>
+
+    <label for="password">Password</label>
+    <input type="password" id="password" name="password" required minlength="8" placeholder="min 8 characters">
+
+    <button type="submit">Register</button>
+  </form>
+</div>
+
+<p>Already have an account? <a href="/login">Login</a></p>
+
+{{template "foot" .}}
