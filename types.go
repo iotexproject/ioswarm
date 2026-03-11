@@ -128,3 +128,23 @@ type payoutInfo struct {
 	Rank        int     `json:"rank"`
 	TotalAgents int     `json:"total_agents"`
 }
+
+// L4 state diff streaming types (match coordinator proto)
+
+type streamStateDiffsRequest struct {
+	AgentID    string `json:"agent_id"`
+	FromHeight uint64 `json:"from_height"`
+}
+
+type stateDiffResponse struct {
+	Height      uint64           `json:"height"`
+	Entries     []*stateDiffEntry `json:"entries"`
+	DigestBytes []byte           `json:"digest_bytes"`
+}
+
+type stateDiffEntry struct {
+	WriteType uint8  `json:"write_type"` // 0=Put, 1=Delete
+	Namespace string `json:"namespace"`
+	Key       []byte `json:"key"`
+	Value     []byte `json:"value,omitempty"`
+}
