@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -19,6 +20,7 @@ type StateSync struct {
 	agentID string
 	logger  *zap.Logger
 	ready   atomic.Bool
+	readyCh chan struct{} // closed when first diff is applied
 	cancel  context.CancelFunc
 }
 
@@ -29,6 +31,7 @@ func NewStateSync(store *StateStore, conn *grpc.ClientConn, agentID string, logg
 		conn:    conn,
 		agentID: agentID,
 		logger:  logger,
+		readyCh: make(chan struct{}),
 	}
 }
 
@@ -48,6 +51,17 @@ func (ss *StateSync) Stop() {
 // Ready returns true when the agent has synced at least one diff.
 func (ss *StateSync) Ready() bool {
 	return ss.ready.Load()
+}
+
+// WaitReady blocks until the first diff is applied or context is cancelled.
+// Returns an error if the context was cancelled before becoming ready.
+func (ss *StateSync) WaitReady(ctx context.Context) error {
+	select {
+	case <-ss.readyCh:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (ss *StateSync) syncLoop(ctx context.Context) {
@@ -100,18 +114,15 @@ func (ss *StateSync) streamDiffs(ctx context.Context) error {
 			return err
 		}
 
-		// Apply diff to local store
+		// Apply diff to local store — failure is fatal, state would be corrupted
 		if err := ss.store.ApplyDiff(resp.Height, resp.Entries); err != nil {
-			ss.logger.Error("failed to apply state diff",
-				zap.Uint64("height", resp.Height),
-				zap.Error(err))
-			continue
+			return fmt.Errorf("fatal: failed to apply state diff at height %d: %w", resp.Height, err)
 		}
-		ss.store.SetHeight(resp.Height)
 		diffsApplied++
 
 		if !ss.ready.Load() {
 			ss.ready.Store(true)
+			close(ss.readyCh)
 			ss.logger.Info("state sync ready — first diff applied",
 				zap.Uint64("height", resp.Height))
 		}

@@ -26,8 +26,9 @@ const (
 // tasksProcessed tracks the total number of tasks processed by this agent.
 var tasksProcessed atomic.Uint32
 
-// globalStateStore is set when running in L4 mode for use by the validator.
-var globalStateStore *StateStore
+// activeStateStore is set when running in L4 mode, protected by the
+// initialization-before-use pattern (set before streamTasks starts).
+var activeStateStore atomic.Pointer[StateStore]
 
 func main() {
 	// Subcommands
@@ -141,19 +142,19 @@ func main() {
 		sync.Start(ctx)
 		defer sync.Stop()
 
-		// Wait for first diff before processing tasks
+		// Wait for first diff before processing tasks (with 60s timeout)
 		logger.Info("waiting for state sync to become ready...")
-		for !sync.Ready() {
-			if ctx.Err() != nil {
-				return
-			}
-			time.Sleep(500 * time.Millisecond)
+		readyCtx, readyCancel := context.WithTimeout(ctx, 60*time.Second)
+		if err := sync.WaitReady(readyCtx); err != nil {
+			readyCancel()
+			logger.Fatal("state sync did not become ready", zap.Error(err))
 		}
+		readyCancel()
 		logger.Info("state sync ready, starting task processing",
 			zap.Uint64("height", stateStore.Height()))
 
-		// Set global state store for L4 validation
-		globalStateStore = stateStore
+		// Store reference for L4 validator (atomic store before streamTasks)
+		activeStateStore.Store(stateStore)
 	}
 
 	// Stream and process tasks

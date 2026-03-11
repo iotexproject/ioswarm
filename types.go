@@ -143,7 +143,7 @@ type stateDiffResponse struct {
 }
 
 type stateDiffEntry struct {
-	WriteType uint8  `json:"write_type"` // 0=Put, 1=Delete
+	WriteType uint8  `json:"write_type"` // WriteTypePut=0, WriteTypeDelete=1
 	Namespace string `json:"namespace"`
 	Key       []byte `json:"key"`
 	Value     []byte `json:"value,omitempty"`

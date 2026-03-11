@@ -31,6 +31,12 @@ const (
 	metaHeight = "height"
 )
 
+// WriteType constants for state diff entries.
+const (
+	WriteTypePut    uint8 = 0
+	WriteTypeDelete uint8 = 1
+)
+
 // OpenStateStore opens or creates a BoltDB state store at the given path.
 func OpenStateStore(path string, logger *zap.Logger) (*StateStore, error) {
 	db, err := bolt.Open(path, 0600, &bolt.Options{
@@ -80,42 +86,43 @@ func (s *StateStore) Height() uint64 {
 }
 
 // ApplyDiff applies a single block's state diff entries atomically.
+// Also updates both the persisted height in BoltDB and the in-memory atomic.
 func (s *StateStore) ApplyDiff(height uint64, entries []*stateDiffEntry) error {
-	return s.db.Update(func(tx *bolt.Tx) error {
+	err := s.db.Update(func(tx *bolt.Tx) error {
 		for _, e := range entries {
 			bucket := tx.Bucket([]byte(e.Namespace))
 			if bucket == nil {
-				// Create bucket on-the-fly for unknown namespaces
-				var err error
-				bucket, err = tx.CreateBucketIfNotExists([]byte(e.Namespace))
-				if err != nil {
-					return fmt.Errorf("create bucket %s: %w", e.Namespace, err)
+				var createErr error
+				bucket, createErr = tx.CreateBucketIfNotExists([]byte(e.Namespace))
+				if createErr != nil {
+					return fmt.Errorf("create bucket %s: %w", e.Namespace, createErr)
 				}
 			}
 			switch e.WriteType {
-			case 0: // Put
+			case WriteTypePut:
 				if err := bucket.Put(e.Key, e.Value); err != nil {
 					return err
 				}
-			case 1: // Delete
+			case WriteTypeDelete:
 				if err := bucket.Delete(e.Key); err != nil {
 					return err
 				}
+			default:
+				s.logger.Warn("unknown write type in state diff",
+					zap.Uint8("write_type", e.WriteType),
+					zap.String("namespace", e.Namespace))
 			}
 		}
-		// Update height
+		// Update height in DB
 		hBuf := make([]byte, 8)
 		binary.BigEndian.PutUint64(hBuf, height)
-		if err := tx.Bucket([]byte(nsMeta)).Put([]byte(metaHeight), hBuf); err != nil {
-			return err
-		}
-		return nil
+		return tx.Bucket([]byte(nsMeta)).Put([]byte(metaHeight), hBuf)
 	})
-}
-
-// SetHeight updates the stored height after applying diffs.
-func (s *StateStore) SetHeight(h uint64) {
-	s.height.Store(h)
+	if err == nil {
+		// Update in-memory height atomically after successful DB write
+		s.height.Store(height)
+	}
+	return err
 }
 
 // Get reads a value by namespace and key. Returns nil if not found.
