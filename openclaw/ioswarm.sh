@@ -277,21 +277,18 @@ query_claimable() {
 }
 
 cmd_status() {
-    local running="false"
-    local pid=""
-
-    if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-        running="true"
-        pid=$(cat "$PID_FILE")
+    # Use the agent binary for accurate status
+    local base_status
+    if [ -x "$AGENT_BIN" ]; then
+        base_status=$("$AGENT_BIN" status --datadir="$AGENT_DIR" 2>/dev/null || echo "{}")
+    else
+        base_status="{}"
     fi
 
-    local agent_id="" wallet="" delegate="" delegate_addr=""
-    [ -f "${AGENT_DIR}/agent.id" ] && agent_id=$(cat "${AGENT_DIR}/agent.id")
-    [ -f "$WALLET_ADDR" ] && wallet=$(cat "$WALLET_ADDR")
+    # Enrich with delegate name and claimable balance
+    local delegate=""
     [ -f "${AGENT_DIR}/delegate.name" ] && delegate=$(cat "${AGENT_DIR}/delegate.name")
-    [ -f "${AGENT_DIR}/delegate.addr" ] && delegate_addr=$(cat "${AGENT_DIR}/delegate.addr")
 
-    # Query on-chain claimable balance
     local claimable="0"
     local contract="${DEFAULT_CONTRACT}"
     local rpc="${DEFAULT_RPC}"
@@ -300,30 +297,19 @@ cmd_status() {
         contract="${IOSWARM_REWARD_CONTRACT:-$DEFAULT_CONTRACT}"
         rpc="${IOSWARM_RPC:-$DEFAULT_RPC}"
     fi
-    if [ -n "$wallet" ] && [ "$wallet" != "pending-derivation" ]; then
+
+    local wallet=""
+    [ -f "$WALLET_ADDR" ] && wallet=$(cat "$WALLET_ADDR")
+    if [ -n "$wallet" ]; then
         claimable=$(query_claimable "$wallet" "$contract" "$rpc")
     fi
 
-    # Count tasks from log (rough estimate)
-    local tasks_processed=0
-    if [ -f "$LOG_FILE" ]; then
-        tasks_processed=$(grep -c '"msg":"batch submitted"' "$LOG_FILE" 2>/dev/null || echo "0")
-    fi
-
-    cat <<EOF
-{
-  "running": ${running},
-  "pid": "${pid}",
-  "agent_id": "${agent_id}",
-  "wallet": "${wallet}",
-  "delegate": "${delegate}",
-  "delegate_addr": "${delegate_addr}",
-  "level": "L2",
-  "claimable_iotx": "${claimable}",
-  "tasks_processed": ${tasks_processed},
-  "log_file": "${LOG_FILE}"
-}
-EOF
+    # Merge fields into JSON (jq-free)
+    echo "$base_status" | sed \
+        -e 's/}$//' \
+        -e "\$a\\
+  ,\"delegate\": \"${delegate}\",\"claimable_iotx\": \"${claimable}\"\\
+}"
 }
 
 # --- Claim ---
@@ -447,6 +433,13 @@ cmd_upgrade() {
     fi
 }
 
+# --- Service (boot persistence) ---
+
+cmd_service() {
+    local action="${1:-install}"
+    "$AGENT_BIN" service --action="$action" --datadir="$AGENT_DIR"
+}
+
 # --- Logs ---
 
 cmd_logs() {
@@ -469,6 +462,7 @@ case "${1:-help}" in
     discover) discover_delegates ;;
     upgrade)  cmd_upgrade ;;
     logs)     cmd_logs ;;
+    service)  cmd_service "${2:-install}" ;;
     help|*)
         echo ""
         echo "  ioSwarm — Earn IOTX with idle compute"
@@ -485,6 +479,7 @@ case "${1:-help}" in
         echo "    discover   Find the best-paying delegate"
         echo "    upgrade    Upgrade agent binary and delegate registry"
         echo "    logs       Show recent agent logs"
+        echo "    service    Install/uninstall as system service (auto-start on boot)"
         echo ""
         ;;
 esac

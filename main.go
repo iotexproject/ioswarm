@@ -49,6 +49,12 @@ func main() {
 		case "addr":
 			runAddr(os.Args[2:])
 			return
+		case "status":
+			runStatus(os.Args[2:])
+			return
+		case "service":
+			runService(os.Args[2:])
+			return
 		}
 	}
 
