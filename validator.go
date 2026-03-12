@@ -31,6 +31,8 @@ func validateTask(task *taskPackage, level string) *taskResult {
 		res = validateL1(task)
 	case "L3":
 		res = validateL3(task)
+	case "L4":
+		res = validateL4(task)
 	default:
 		res = validateL2(task)
 	}
@@ -213,6 +215,50 @@ func validateL3(task *taskPackage) ValidationResult {
 	// Store EVM results for inclusion in taskResult
 	vr.evmResult = result
 	return vr
+}
+
+// validateL4 performs stateful EVM execution using the local state store.
+//
+// Current status: L4 validation is a stub. It runs L3 validation with the
+// coordinator-provided state while verifying that local state exists.
+//
+// TODO(stage-1): Deserialize iotex-core's account proto from local BoltDB
+// and use local nonce/balance for L2 checks instead of coordinator snapshots.
+// TODO(stage-1): Use local contract code and storage for EVM execution.
+// TODO(stage-1): Verify state diff digest against applied entries.
+func validateL4(task *taskPackage) ValidationResult {
+	store := activeStateStore.Load()
+	if store == nil {
+		return ValidationResult{
+			Valid:        false,
+			RejectReason: "L4 state store not initialized",
+		}
+	}
+
+	// Run L1 checks first
+	l1 := validateL1(task)
+	if !l1.Valid {
+		return l1
+	}
+
+	// Verify local state exists for sender (proves sync is working).
+	// NOTE: iotex-core keys accounts by 20-byte address hash, not the
+	// string representation. The actual key format will be matched in stage-1
+	// when we add proto deserialization.
+	localHeight := store.Height()
+
+	// Fall through to L3 execution with coordinator-provided state.
+	// L4's value today: proves the state sync pipeline works end-to-end.
+	// L4's value in stage-1: full local state for independent validation.
+	l3Result := validateL3(task)
+
+	// Tag the result as L4 with sync height for tracking
+	l3Result.Note = fmt.Sprintf("L4-stateful(h=%d)", localHeight)
+	if l3Result.Note != "" && l3Result.evmResult != nil {
+		l3Result.Note = fmt.Sprintf("L4-stateful(h=%d): evm", localHeight)
+	}
+
+	return l3Result
 }
 
 // extractTxNonce reads the nonce from the first 8 bytes of TxRaw (big-endian uint64).

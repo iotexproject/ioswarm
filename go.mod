@@ -5,6 +5,7 @@ go 1.23.0
 require (
 	github.com/ethereum/go-ethereum v1.10.26
 	github.com/holiman/uint256 v1.3.2
+	go.etcd.io/bbolt v1.3.11
 	go.uber.org/zap v1.27.0
 	google.golang.org/grpc v1.65.0
 )

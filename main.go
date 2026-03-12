@@ -26,6 +26,10 @@ const (
 // tasksProcessed tracks the total number of tasks processed by this agent.
 var tasksProcessed atomic.Uint32
 
+// activeStateStore is set when running in L4 mode, protected by the
+// initialization-before-use pattern (set before streamTasks starts).
+var activeStateStore atomic.Pointer[StateStore]
+
 func main() {
 	// Subcommands
 	if len(os.Args) > 1 {
@@ -45,10 +49,11 @@ func main() {
 	coordinator := flag.String("coordinator", "127.0.0.1:14689", "coordinator gRPC address")
 	apiKey := flag.String("api-key", "", "HMAC API key (iosw_...)")
 	agentID := flag.String("agent-id", "", "agent ID (extracted from api-key context, or set manually)")
-	level := flag.String("level", "L2", "task level: L1, L2, L3")
+	level := flag.String("level", "L2", "task level: L1, L2, L3, L4")
 	region := flag.String("region", "default", "region label")
 	wallet := flag.String("wallet", "", "IOTX wallet address for rewards")
 	tlsCert := flag.String("tls-cert", "", "path to TLS certificate (optional)")
+	dataDir := flag.String("datadir", "", "data directory for L4 state store (required for L4)")
 	flag.Parse()
 
 	// Also check env vars as fallback
@@ -67,8 +72,17 @@ func main() {
 		}
 	}
 
+	if *dataDir == "" {
+		*dataDir = os.Getenv("IOSWARM_DATADIR")
+	}
+
 	if *agentID == "" {
 		fmt.Fprintf(os.Stderr, "error: --agent-id is required\n")
+		os.Exit(1)
+	}
+
+	if strings.ToUpper(*level) == "L4" && *dataDir == "" {
+		fmt.Fprintf(os.Stderr, "error: --datadir is required for L4 mode\n")
 		os.Exit(1)
 	}
 
@@ -112,6 +126,36 @@ func main() {
 		hbInterval = 10 * time.Second
 	}
 	go heartbeatLoop(ctx, conn, *agentID, hbInterval, logger)
+
+	// L4: initialize state store and sync
+	var stateStore *StateStore
+	if strings.ToUpper(*level) == "L4" {
+		dbPath := *dataDir + "/state.db"
+		var err error
+		stateStore, err = OpenStateStore(dbPath, logger)
+		if err != nil {
+			logger.Fatal("failed to open state store", zap.Error(err))
+		}
+		defer stateStore.Close()
+
+		sync := NewStateSync(stateStore, conn, *agentID, logger)
+		sync.Start(ctx)
+		defer sync.Stop()
+
+		// Wait for first diff before processing tasks (with 60s timeout)
+		logger.Info("waiting for state sync to become ready...")
+		readyCtx, readyCancel := context.WithTimeout(ctx, 60*time.Second)
+		if err := sync.WaitReady(readyCtx); err != nil {
+			readyCancel()
+			logger.Fatal("state sync did not become ready", zap.Error(err))
+		}
+		readyCancel()
+		logger.Info("state sync ready, starting task processing",
+			zap.Uint64("height", stateStore.Height()))
+
+		// Store reference for L4 validator (atomic store before streamTasks)
+		activeStateStore.Store(stateStore)
+	}
 
 	// Stream and process tasks
 	streamTasks(ctx, conn, *agentID, *level, *region, *wallet, logger)
@@ -294,6 +338,8 @@ func parseLevel(s string) int32 {
 		return 0
 	case "L3":
 		return 2
+	case "L4":
+		return 3
 	default:
 		return 1
 	}
