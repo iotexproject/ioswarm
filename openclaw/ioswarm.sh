@@ -35,36 +35,14 @@ generate_wallet() {
         return 0
     fi
 
-    log "Generating IOTX wallet..."
-
-    # Use the agent binary's keygen subcommand if available
-    if [ -x "$AGENT_BIN" ] && "$AGENT_BIN" keygen --help &>/dev/null; then
-        "$AGENT_BIN" keygen --out "$WALLET_KEY" --addr-out "$WALLET_ADDR"
-    else
-        # Fallback: generate secp256k1 private key via openssl
-        local privkey
-        privkey=$(openssl ecparam -name secp256k1 -genkey -noout 2>/dev/null \
-            | openssl ec -text -noout 2>/dev/null \
-            | grep -A3 'priv:' | tail -3 | tr -d ' :\n')
-
-        if [ -z "$privkey" ] || [ ${#privkey} -lt 64 ]; then
-            # Simpler fallback: random 32 bytes (valid for secp256k1 with overwhelming probability)
-            privkey=$(openssl rand -hex 32)
-        fi
-
-        echo "$privkey" > "$WALLET_KEY"
-        chmod 600 "$WALLET_KEY"
-
-        # Derive address: keccak256(pubkey) → last 20 bytes
-        # This requires the agent binary. If unavailable, store a placeholder.
-        if [ -x "$AGENT_BIN" ] && "$AGENT_BIN" addr --key "$WALLET_KEY" &>/dev/null; then
-            "$AGENT_BIN" addr --key "$WALLET_KEY" > "$WALLET_ADDR"
-        else
-            # Placeholder — will be resolved on first agent start
-            echo "pending-derivation" > "$WALLET_ADDR"
-            warn "Wallet address will be derived on first agent start"
-        fi
+    if [ ! -x "$AGENT_BIN" ]; then
+        error "ioswarm-agent binary not found at ${AGENT_BIN}"
+        error "Run the installer first: curl -sSL https://raw.githubusercontent.com/iotexproject/ioswarm-agent/main/openclaw/install.sh | bash"
+        exit 1
     fi
+
+    log "Generating IOTX wallet..."
+    "$AGENT_BIN" keygen --out "$WALLET_KEY" --addr-out "$WALLET_ADDR"
 
     chmod 600 "$WALLET_KEY"
     log "Wallet created"
@@ -267,46 +245,35 @@ cmd_stop() {
 # --- Status ---
 
 query_claimable() {
-    # Query on-chain claimable balance via eth_call
+    # Query on-chain claimable balance via ioswarm-agent claim --dry-run
     local wallet="$1"
     local contract="${2:-$DEFAULT_CONTRACT}"
     local rpc="${3:-$DEFAULT_RPC}"
 
-    if [ "$wallet" = "pending-derivation" ] || [ -z "$wallet" ]; then
+    if [ -z "$wallet" ]; then
         echo "0"
         return
     fi
 
-    # claimable(address) selector = 0x402914f5
-    # ABI-encode the address (left-pad to 32 bytes)
-    local addr_clean
-    addr_clean=$(echo "$wallet" | sed 's/^0x//' | tr '[:upper:]' '[:lower:]')
-    local calldata="0x402914f5000000000000000000000000${addr_clean}"
-
-    local result
-    result=$(curl -sSL --connect-timeout 5 --max-time 10 "$rpc" \
-        -H "Content-Type: application/json" \
-        -d "{\"jsonrpc\":\"2.0\",\"method\":\"eth_call\",\"params\":[{\"to\":\"${contract}\",\"data\":\"${calldata}\"},\"latest\"],\"id\":1}" \
-        2>/dev/null || echo "")
-
-    if [ -z "$result" ]; then
+    if [ ! -x "$AGENT_BIN" ] || [ ! -f "$WALLET_KEY" ]; then
         echo "0"
         return
     fi
 
-    # Parse hex result → decimal wei → IOTX
-    local hex_val
-    hex_val=$(echo "$result" | grep -o '"result":"0x[0-9a-fA-F]*"' | sed 's/"result":"//;s/"//' || echo "0x0")
+    # Use the agent binary's claim --dry-run to get claimable amount
+    local output
+    output=$(IOSWARM_PRIVATE_KEY=$(cat "$WALLET_KEY") "$AGENT_BIN" claim \
+        --contract="$contract" --rpc="$rpc" --dry-run 2>/dev/null || echo "")
 
-    if [ "$hex_val" = "0x" ] || [ -z "$hex_val" ]; then
+    # Parse "Claimable: 1.234567 IOTX" from output
+    local amount
+    amount=$(echo "$output" | grep -o 'Claimable: [0-9.]*' | head -1 | awk '{print $2}')
+
+    if [ -n "$amount" ]; then
+        echo "$amount"
+    else
         echo "0"
-        return
     fi
-
-    # Convert hex wei to IOTX (divide by 1e18)
-    local dec_wei
-    dec_wei=$(printf "%d" "$hex_val" 2>/dev/null || echo "0")
-    awk "BEGIN {printf \"%.4f\", $dec_wei / 1000000000000000000}"
 }
 
 cmd_status() {
