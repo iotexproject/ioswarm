@@ -1,0 +1,12 @@
+[
+  {
+    "name": "metanyx",
+    "grpc": "delegate-metanyx.iotex.io:14689",
+    "api": "http://delegate-metanyx.iotex.io:14690"
+  },
+  {
+    "name": "iotex-dev",
+    "grpc": "delegate-dev.iotex.io:14689",
+    "api": "http://delegate-dev.iotex.io:14690"
+  }
+]
