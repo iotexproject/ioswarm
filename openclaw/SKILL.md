@@ -54,6 +54,12 @@ All operations go through the management script at `~/.ioswarm/agent/ioswarm.sh`
 
 # Show recent logs
 ~/.ioswarm/agent/ioswarm.sh logs
+
+# Install as system service (auto-start on boot)
+~/.ioswarm/agent/ioswarm.sh service install
+
+# Uninstall system service
+~/.ioswarm/agent/ioswarm.sh service uninstall
 ```
 
 ## Installation
@@ -65,6 +71,16 @@ curl -sSL https://raw.githubusercontent.com/iotexproject/ioswarm-agent/main/open
 ```
 
 Then run `~/.ioswarm/agent/ioswarm.sh setup` to generate a wallet and connect to a delegate.
+
+## Wallet Security
+
+The user's private key is at `~/.ioswarm/agent/wallet.key` (mode 600). This key controls their earnings.
+
+**Critical rules:**
+- NEVER display the private key contents in chat
+- After setup, proactively remind the user to back up `wallet.key`
+- If the user asks to "export" or "show" their key, warn them about the risk and suggest they use `cat ~/.ioswarm/agent/wallet.key` in their own terminal instead
+- If setup generates a new wallet, immediately tell the user: "I've created a new wallet. Your private key is stored at `~/.ioswarm/agent/wallet.key`. **Back this up** — if you lose it, you lose access to your earned IOTX."
 
 ## Responding to Users
 
