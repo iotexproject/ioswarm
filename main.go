@@ -43,6 +43,12 @@ func main() {
 		case "fund":
 			runFund(os.Args[2:])
 			return
+		case "keygen":
+			runKeygen(os.Args[2:])
+			return
+		case "addr":
+			runAddr(os.Args[2:])
+			return
 		}
 	}
 
