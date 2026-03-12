@@ -143,6 +143,27 @@ func (s *StateStore) Get(namespace string, key []byte) ([]byte, error) {
 	return val, err
 }
 
+// GetAccount reads and decodes an IoTeX Account from the Account namespace.
+// addrHash is the 20-byte address (bech32-decoded for io1, hex-decoded for 0x).
+// Returns nil, nil if the account is not found.
+func (s *StateStore) GetAccount(addrHash []byte) (*IoTXAccount, error) {
+	data, err := s.Get(nsAccount, addrHash)
+	if err != nil {
+		return nil, err
+	}
+	if data == nil {
+		return nil, nil
+	}
+	return DecodeAccount(data)
+}
+
+// GetCode reads contract bytecode from the Code namespace.
+// codeHash is the hash of the contract bytecode.
+// Returns nil, nil if the code is not found.
+func (s *StateStore) GetCode(codeHash []byte) ([]byte, error) {
+	return s.Get(nsCode, codeHash)
+}
+
 // Stats returns basic stats about the store.
 func (s *StateStore) Stats() map[string]int {
 	stats := make(map[string]int)

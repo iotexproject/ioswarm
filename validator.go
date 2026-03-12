@@ -217,15 +217,13 @@ func validateL3(task *taskPackage) ValidationResult {
 	return vr
 }
 
-// validateL4 performs stateful EVM execution using the local state store.
+// validateL4 performs stateful validation using the local state store.
 //
-// Current status: L4 validation is a stub. It runs L3 validation with the
-// coordinator-provided state while verifying that local state exists.
-//
-// TODO(stage-1): Deserialize iotex-core's account proto from local BoltDB
-// and use local nonce/balance for L2 checks instead of coordinator snapshots.
-// TODO(stage-1): Use local contract code and storage for EVM execution.
-// TODO(stage-1): Verify state diff digest against applied entries.
+// Flow:
+//  1. L1 signature checks (same as before)
+//  2. L2 state checks — try local BoltDB Account first, fall back to coordinator state
+//  3. L3 EVM — still uses coordinator-provided ContractCode/StorageSlots
+//     (Contract namespace stores MPT trie nodes, can't do flat lookup — Stage-2)
 func validateL4(task *taskPackage) ValidationResult {
 	store := activeStateStore.Load()
 	if store == nil {
@@ -235,30 +233,86 @@ func validateL4(task *taskPackage) ValidationResult {
 		}
 	}
 
-	// Run L1 checks first
+	localHeight := store.Height()
+
+	// L1: signature checks
 	l1 := validateL1(task)
 	if !l1.Valid {
 		return l1
 	}
 
-	// Verify local state exists for sender (proves sync is working).
-	// NOTE: iotex-core keys accounts by 20-byte address hash, not the
-	// string representation. The actual key format will be matched in stage-1
-	// when we add proto deserialization.
-	localHeight := store.Height()
+	// L2: try local Account state for nonce/balance checks
+	localUsed := false
+	if task.Sender != nil && task.Sender.Address != "" {
+		addrHash, err := addressToHash160(task.Sender.Address)
+		if err == nil {
+			acct, err := store.GetAccount(addrHash)
+			if err == nil && acct != nil {
+				localUsed = true
 
-	// Fall through to L3 execution with coordinator-provided state.
-	// L4's value today: proves the state sync pipeline works end-to-end.
-	// L4's value in stage-1: full local state for independent validation.
-	l3Result := validateL3(task)
+				// Balance check
+				if acct.Balance.Sign() <= 0 {
+					return ValidationResult{
+						Valid:        false,
+						RejectReason: "sender has zero balance (L4-local)",
+						Note:         fmt.Sprintf("L4-local(h=%d)", localHeight),
+					}
+				}
 
-	// Tag the result as L4 with sync height for tracking
-	l3Result.Note = fmt.Sprintf("L4-stateful(h=%d)", localHeight)
-	if l3Result.Note != "" && l3Result.evmResult != nil {
-		l3Result.Note = fmt.Sprintf("L4-stateful(h=%d): evm", localHeight)
+				// Nonce check
+				txNonce := extractTxNonce(task.TxRaw)
+				if txNonce < acct.Nonce {
+					return ValidationResult{
+						Valid:        false,
+						RejectReason: fmt.Sprintf("nonce too low: tx=%d account=%d (L4-local)", txNonce, acct.Nonce),
+						Note:         fmt.Sprintf("L4-local(h=%d)", localHeight),
+					}
+				}
+			}
+		}
 	}
 
-	return l3Result
+	// If local lookup failed, fall back to coordinator-provided L2
+	if !localUsed {
+		l2 := validateL2(task)
+		if !l2.Valid {
+			return l2
+		}
+	}
+
+	// L3 EVM — still uses coordinator-provided ContractCode/StorageSlots
+	if task.EvmTx == nil {
+		gasEstimate := uint64(21000)
+		if task.Receiver != nil && len(task.Receiver.CodeHash) > 0 {
+			gasEstimate = 100000
+		}
+		src := "coord"
+		if localUsed {
+			src = "local"
+		}
+		return ValidationResult{
+			Valid:       true,
+			GasEstimate: gasEstimate,
+			Note:        fmt.Sprintf("L4-stateful(h=%d,src=%s): no-evm", localHeight, src),
+		}
+	}
+
+	result := executeEVM(task)
+	vr := ValidationResult{
+		Valid:       result.Success,
+		GasEstimate: result.GasUsed,
+		evmResult:   result,
+	}
+	if !result.Success {
+		vr.RejectReason = result.Error
+	}
+
+	src := "coord"
+	if localUsed {
+		src = "local"
+	}
+	vr.Note = fmt.Sprintf("L4-stateful(h=%d,src=%s): evm", localHeight, src)
+	return vr
 }
 
 // extractTxNonce reads the nonce from the first 8 bytes of TxRaw (big-endian uint64).

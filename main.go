@@ -66,6 +66,7 @@ func main() {
 	wallet := flag.String("wallet", "", "IOTX wallet address for rewards")
 	tlsCert := flag.String("tls-cert", "", "path to TLS certificate (optional)")
 	dataDir := flag.String("datadir", "", "data directory for L4 state store (required for L4)")
+	snapshot := flag.String("snapshot", "", "path to IOSWSNAP file for bootstrap (L4 only)")
 	flag.Parse()
 
 	// Also check env vars as fallback
@@ -149,6 +150,17 @@ func main() {
 			logger.Fatal("failed to open state store", zap.Error(err))
 		}
 		defer stateStore.Close()
+
+		// Load snapshot if provided and store is empty
+		if *snapshot != "" && stateStore.Height() == 0 {
+			h, n, err := LoadSnapshot(*snapshot, stateStore, logger)
+			if err != nil {
+				logger.Fatal("failed to load snapshot", zap.Error(err))
+			}
+			logger.Info("loaded snapshot",
+				zap.Uint64("height", h),
+				zap.Int("entries", n))
+		}
 
 		sync := NewStateSync(stateStore, conn, *agentID, logger)
 		sync.Start(ctx)

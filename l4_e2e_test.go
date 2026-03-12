@@ -491,18 +491,19 @@ func (mc *mockCoordinator) handleGetTasks(srv interface{}, stream grpc.ServerStr
 	txRaw[40] = 0x01                          // s non-zero
 	txRaw[72] = 0x1b                          // v=27
 
+	// Use 0x addresses that match mock state diff entries so L4 local lookup works
 	return stream.SendMsg(&taskBatch{
 		BatchID:   "e2e-batch-001",
 		Timestamp: uint64(time.Now().UnixMilli()),
 		Tasks: []*taskPackage{
 			{
 				TaskID: 1, TxRaw: txRaw, Level: 3, BlockHeight: 50,
-				Sender:   &accountSnapshot{Address: "io1sender01", Balance: "1000000000000000000", Nonce: 0},
-				Receiver: &accountSnapshot{Address: "io1receiver01", Balance: "500000000000000000", Nonce: 0},
+				Sender:   &accountSnapshot{Address: "0xAA00000000000000000000000000000000000001", Balance: "1000000000000000000", Nonce: 0},
+				Receiver: &accountSnapshot{Address: "0xBB00000000000000000000000000000000000001", Balance: "500000000000000000", Nonce: 0},
 			},
 			{
 				TaskID: 2, TxRaw: txRaw, Level: 3, BlockHeight: 50,
-				Sender:   &accountSnapshot{Address: "io1sender02", Balance: "2000000000000000000", Nonce: 0},
+				Sender:   &accountSnapshot{Address: "0xAA00000000000000000000000000000000000002", Balance: "2000000000000000000", Nonce: 0},
 				Receiver: nil, // contract deploy
 			},
 		},
@@ -520,23 +521,34 @@ func (mc *mockCoordinator) handleStreamStateDiffs(srv interface{}, stream grpc.S
 		from = 1
 	}
 
-	for h := from; h <= 50; h++ {
-		senderKey := []byte("sender-addr-001")
-		receiverKey := []byte("receiver-addr-001")
+	// 20-byte address keys matching the 0x addresses used in handleGetTasks
+	senderKey1 := make([]byte, 20)
+	senderKey1[0] = 0xAA
+	senderKey1[19] = 0x01 // matches 0xAA00...0001
 
-		balBuf := make([]byte, 8)
-		binary.BigEndian.PutUint64(balBuf, 1000000-h*100)
-		recvBuf := make([]byte, 8)
-		binary.BigEndian.PutUint64(recvBuf, h*100)
-		nonceBuf := make([]byte, 8)
-		binary.BigEndian.PutUint64(nonceBuf, h)
+	senderKey2 := make([]byte, 20)
+	senderKey2[0] = 0xAA
+	senderKey2[19] = 0x02 // matches 0xAA00...0002
+
+	receiverKey := make([]byte, 20)
+	receiverKey[0] = 0xBB
+	receiverKey[19] = 0x01 // matches 0xBB00...0001
+
+	// Also keep legacy keys for backward compatibility with older test assertions
+	legacySenderKey := []byte("sender-addr-001")
+
+	for h := from; h <= 50; h++ {
+		// Protobuf-encoded accounts for the new L4 local lookup path
+		senderAcct := encodeTestAccount(h, fmt.Sprintf("%d", 1000000-h*100), nil, nil)
+		receiverAcct := encodeTestAccount(0, fmt.Sprintf("%d", h*100), nil, nil)
 
 		if err := stream.SendMsg(&stateDiffResponse{
 			Height: h,
 			Entries: []*stateDiffEntry{
-				{WriteType: WriteTypePut, Namespace: nsAccount, Key: senderKey, Value: balBuf},
-				{WriteType: WriteTypePut, Namespace: nsAccount, Key: receiverKey, Value: recvBuf},
-				{WriteType: WriteTypePut, Namespace: nsAccount, Key: append(senderKey, []byte("-nonce")...), Value: nonceBuf},
+				{WriteType: WriteTypePut, Namespace: nsAccount, Key: senderKey1, Value: senderAcct},
+				{WriteType: WriteTypePut, Namespace: nsAccount, Key: senderKey2, Value: senderAcct},
+				{WriteType: WriteTypePut, Namespace: nsAccount, Key: receiverKey, Value: receiverAcct},
+				{WriteType: WriteTypePut, Namespace: nsAccount, Key: legacySenderKey, Value: []byte("bal")},
 			},
 			DigestBytes: []byte(fmt.Sprintf("digest-h%d", h)),
 		}); err != nil {
@@ -546,4 +558,274 @@ func (mc *mockCoordinator) handleStreamStateDiffs(srv interface{}, stream grpc.S
 
 	<-stream.Context().Done()
 	return nil
+}
+
+// TestSnapshotDiffCatchUp tests the full L4 pipeline (TEST_PLAN 11.11):
+//  1. Load baseline snapshot at height H
+//  2. Start StateSync from H+1
+//  3. Verify agent catches up and local state is queryable
+func TestSnapshotDiffCatchUp(t *testing.T) {
+	logger, _ := zap.NewDevelopment()
+	dir := t.TempDir()
+
+	// 1. Create a snapshot at height 25 with protobuf-encoded accounts
+	senderKey := make([]byte, 20)
+	senderKey[0] = 0xAA
+	senderKey[19] = 0x01
+
+	receiverKey := make([]byte, 20)
+	receiverKey[0] = 0xBB
+	receiverKey[19] = 0x01
+
+	snapEntries := []testSnapEntry{
+		{ns: nsAccount, key: senderKey, val: encodeTestAccount(25, "997500", nil, nil)},
+		{ns: nsAccount, key: receiverKey, val: encodeTestAccount(0, "2500", nil, nil)},
+	}
+	snapPath := filepath.Join(dir, "baseline.snap")
+	writeTestSnapshot(t, snapPath, 25, snapEntries)
+
+	// 2. Open store and load snapshot
+	dbPath := filepath.Join(dir, "state.db")
+	store, err := OpenStateStore(dbPath, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	h, n, err := LoadSnapshot(snapPath, store, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("snapshot loaded: height=%d entries=%d", h, n)
+
+	if store.Height() != 25 {
+		t.Fatalf("store height after snapshot = %d, want 25", store.Height())
+	}
+
+	// Verify snapshot accounts
+	acct, err := store.GetAccount(senderKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acct == nil || acct.Nonce != 25 {
+		t.Fatalf("snapshot sender nonce = %v, want 25", acct)
+	}
+
+	// 3. Start mock coordinator that serves diffs from height 26-50
+	coord := newMockCoordinator(t)
+	port := coord.start(t)
+	defer coord.stop()
+
+	conn, err := grpc.NewClient(
+		fmt.Sprintf("127.0.0.1:%d", port),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Register first
+	_, err = register(ctx, conn, "snap-test", "L4", "test", "", logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 4. StateSync catches up from height 26
+	ss := NewStateSync(store, conn, "snap-test", logger)
+	ss.Start(ctx)
+	defer ss.Stop()
+
+	readyCtx, readyCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer readyCancel()
+	if err := ss.WaitReady(readyCtx); err != nil {
+		t.Fatalf("sync not ready: %v", err)
+	}
+
+	// Wait for all diffs
+	deadline := time.After(10 * time.Second)
+	for store.Height() < 50 {
+		select {
+		case <-deadline:
+			t.Fatalf("timed out at height %d", store.Height())
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+
+	t.Logf("synced to height %d (snapshot=25 + 25 diffs)", store.Height())
+
+	// 5. Verify: latest account state reflects diff updates (not just snapshot)
+	acct, err = store.GetAccount(senderKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acct == nil {
+		t.Fatal("sender account not found after sync")
+	}
+	// At height 50, nonce should be 50 (set by mock diff handler)
+	if acct.Nonce != 50 {
+		t.Errorf("sender nonce = %d, want 50 (latest diff)", acct.Nonce)
+	}
+
+	// 6. L4 validation with local state
+	activeStateStore.Store(store)
+	txRaw := make([]byte, 73)
+	binary.BigEndian.PutUint64(txRaw[:8], 50) // nonce=50 (matches latest)
+	txRaw[8] = 0x01
+	txRaw[40] = 0x01
+	txRaw[72] = 0x1b
+
+	task := &taskPackage{
+		TaskID: 99, TxRaw: txRaw, Level: 3, BlockHeight: 50,
+		Sender:   &accountSnapshot{Address: "0xAA00000000000000000000000000000000000001", Balance: "1000000", Nonce: 0},
+		Receiver: &accountSnapshot{Address: "0xBB00000000000000000000000000000000000001", Balance: "500", Nonce: 0},
+	}
+	res := validateL4(task)
+	t.Logf("L4 result: valid=%v note=%q reject=%q", res.Valid, res.Note, res.RejectReason)
+
+	if !res.Valid {
+		t.Errorf("expected valid, got reject=%q", res.RejectReason)
+	}
+	if res.Note == "" {
+		t.Error("missing L4 note")
+	}
+
+	t.Logf("=== SNAPSHOT + DIFF CATCH-UP E2E PASSED (test 11.11) ===")
+}
+
+// TestL4LocalStateLookup verifies L4 validator uses local BoltDB state for nonce/balance checks.
+func TestL4LocalStateLookup(t *testing.T) {
+	logger := zap.NewNop()
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+
+	store, err := OpenStateStore(dbPath, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// Insert sender account: nonce=10, balance=5000000
+	senderAddr := "0xAA00000000000000000000000000000000000099"
+	senderKey, _ := addressToHash160(senderAddr)
+	acctData := encodeTestAccount(10, "5000000", nil, nil)
+	store.ApplyDiff(100, []*stateDiffEntry{
+		{WriteType: WriteTypePut, Namespace: nsAccount, Key: senderKey, Value: acctData},
+	})
+	activeStateStore.Store(store)
+
+	t.Run("valid_tx_local_state", func(t *testing.T) {
+		txRaw := make([]byte, 73)
+		binary.BigEndian.PutUint64(txRaw[:8], 10) // nonce=10
+		txRaw[8] = 0x01
+		txRaw[40] = 0x01
+		txRaw[72] = 0x1b
+
+		task := &taskPackage{
+			TaskID: 1, TxRaw: txRaw, Level: 3, BlockHeight: 100,
+			Sender:   &accountSnapshot{Address: senderAddr, Balance: "999", Nonce: 0},
+			Receiver: &accountSnapshot{Address: "0xBB00000000000000000000000000000000000001", Balance: "100", Nonce: 0},
+		}
+		res := validateL4(task)
+		if !res.Valid {
+			t.Errorf("expected valid, got reject=%q", res.RejectReason)
+		}
+		if res.Note == "" || !contains(res.Note, "local") {
+			t.Errorf("expected 'local' in note, got %q", res.Note)
+		}
+		t.Logf("valid tx: note=%q", res.Note)
+	})
+
+	t.Run("nonce_too_low_local_state", func(t *testing.T) {
+		txRaw := make([]byte, 73)
+		binary.BigEndian.PutUint64(txRaw[:8], 5) // nonce=5 < account nonce=10
+		txRaw[8] = 0x01
+		txRaw[40] = 0x01
+		txRaw[72] = 0x1b
+
+		task := &taskPackage{
+			TaskID: 2, TxRaw: txRaw, Level: 3, BlockHeight: 100,
+			Sender:   &accountSnapshot{Address: senderAddr, Balance: "999", Nonce: 0},
+			Receiver: nil,
+		}
+		res := validateL4(task)
+		if res.Valid {
+			t.Error("expected rejection for low nonce")
+		}
+		if !contains(res.RejectReason, "nonce too low") {
+			t.Errorf("unexpected reject: %q", res.RejectReason)
+		}
+		if !contains(res.RejectReason, "L4-local") {
+			t.Errorf("expected 'L4-local' in reject, got %q", res.RejectReason)
+		}
+		t.Logf("nonce reject: %q", res.RejectReason)
+	})
+
+	t.Run("zero_balance_local_state", func(t *testing.T) {
+		// Insert zero-balance account
+		zeroAddr := "0xCC00000000000000000000000000000000000001"
+		zeroKey, _ := addressToHash160(zeroAddr)
+		zeroAcct := encodeTestAccount(0, "0", nil, nil)
+		store.ApplyDiff(101, []*stateDiffEntry{
+			{WriteType: WriteTypePut, Namespace: nsAccount, Key: zeroKey, Value: zeroAcct},
+		})
+
+		txRaw := make([]byte, 73)
+		binary.BigEndian.PutUint64(txRaw[:8], 0)
+		txRaw[8] = 0x01
+		txRaw[40] = 0x01
+		txRaw[72] = 0x1b
+
+		task := &taskPackage{
+			TaskID: 3, TxRaw: txRaw, Level: 3, BlockHeight: 101,
+			Sender:   &accountSnapshot{Address: zeroAddr, Balance: "999", Nonce: 0},
+			Receiver: nil,
+		}
+		res := validateL4(task)
+		if res.Valid {
+			t.Error("expected rejection for zero balance")
+		}
+		if !contains(res.RejectReason, "zero balance") {
+			t.Errorf("unexpected reject: %q", res.RejectReason)
+		}
+		t.Logf("zero balance reject: %q", res.RejectReason)
+	})
+
+	t.Run("fallback_to_coordinator_state", func(t *testing.T) {
+		// Use io1 address that addressToHash160 doesn't support → falls back to coordinator
+		txRaw := make([]byte, 73)
+		binary.BigEndian.PutUint64(txRaw[:8], 0)
+		txRaw[8] = 0x01
+		txRaw[40] = 0x01
+		txRaw[72] = 0x1b
+
+		task := &taskPackage{
+			TaskID: 4, TxRaw: txRaw, Level: 3, BlockHeight: 100,
+			Sender:   &accountSnapshot{Address: "io1unknown", Balance: "1000000", Nonce: 0},
+			Receiver: nil,
+		}
+		res := validateL4(task)
+		if !res.Valid {
+			t.Errorf("expected valid (coordinator fallback), got reject=%q", res.RejectReason)
+		}
+		if contains(res.Note, "local") {
+			t.Errorf("should use coord fallback, got note=%q", res.Note)
+		}
+		t.Logf("fallback: note=%q", res.Note)
+	})
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && searchSubstr(s, substr)
+}
+
+func searchSubstr(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
 }
