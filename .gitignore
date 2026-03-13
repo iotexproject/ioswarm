@@ -11,3 +11,4 @@ ioswarm-agent
 
 # OS
 .DS_Store
+*.snap.gz

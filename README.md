@@ -29,11 +29,21 @@ IOSwarm agent node for the IoTeX network. Connects to a delegate's coordinator, 
                                      └───────────────────────────────┘
 ```
 
+## State Snapshot
+
+IoTeX mainnet state snapshots are hosted as a public service, updated daily via Cloudflare CDN:
+
+- **Server:** https://ts.iotex.me
+- `acctcode.snap.gz` (~209 MB) — Account + Code, sufficient for L3/L4
+- `baseline.snap.gz` (~1.4 GB) — Full state including Contract namespace
+
+Only needed for L4 first boot. L3 agents (default) don't require a snapshot.
+
 ## Supported Delegates
 
-| Delegate | Coordinator | Snapshot | Status |
-|----------|------------|----------|--------|
-| **goodwell** | `delegate.goodwillclaw.com:443` | [ts.iotex.me](https://ts.iotex.me) | Active |
+| Delegate | Coordinator | Website | Status |
+|----------|------------|---------|--------|
+| **goodwell** | `delegate.goodwillclaw.com:443` | [goodwillclaw.com](https://goodwillclaw.com/) | Active |
 
 Want to add your delegate? See the [Coordinator README](https://github.com/iotexproject/iotex-core/tree/ioswarm-v2.3.5/ioswarm) for setup instructions.
 
@@ -42,27 +52,18 @@ Want to add your delegate? See the [Coordinator README](https://github.com/iotex
 ### Prerequisites
 
 - Any 64-bit machine (Linux, macOS, Windows WSL2)
-- ~2 GB RAM, ~2 GB disk
+- **L3 (default):** ~4 GB RAM, ~1 GB disk — coordinator provides state per transaction
+- **L4 (full state):** ~8 GB RAM, ~4 GB disk — maintains local copy of blockchain state
 - Optional: Docker (for containerized deployment) or Go 1.23+ (to build from source)
 
-### 1. Download the state snapshot
-
-```bash
-curl -O https://ts.iotex.me/acctcode.snap.gz    # ~209 MB, one-time download
-```
-
-This is a compressed copy of the IoTeX mainnet state. You only need it for the first boot — after that the agent syncs incrementally.
-
-> **Snapshot server:** https://ts.iotex.me — updated daily, served via Cloudflare CDN.
-
-### 2. Get your credentials
+### 1. Get your credentials
 
 Contact the delegate operator to get:
 - **Coordinator address** (e.g., `delegate.goodwillclaw.com:443`)
 - **Agent ID** (e.g., `agent-01`)
 - **API key** (`iosw_...` format)
 
-### 3. Start the agent
+### 2. Start the agent
 
 **Option A: Docker (recommended)**
 
@@ -70,15 +71,10 @@ Works on Linux (amd64), macOS (Apple Silicon & Intel), and Windows (WSL2). No Go
 
 ```bash
 docker run -d --name ioswarm-agent --restart=always \
-  -v $(pwd)/acctcode.snap.gz:/data/acctcode.snap.gz \
-  -v $(pwd)/l4state:/data/l4state \
   raullen/ioswarm-agent:latest \
   --coordinator=delegate.goodwillclaw.com:443 \
   --agent-id=<your-id> \
   --api-key=iosw_<your-key> \
-  --level=L4 \
-  --snapshot=/data/acctcode.snap.gz \
-  --datadir=/data/l4state \
   --wallet=<your-iotx-address>
 ```
 
@@ -108,9 +104,6 @@ chmod +x ioswarm-agent
   --coordinator=delegate.goodwillclaw.com:443 \
   --agent-id=<your-id> \
   --api-key=iosw_<your-key> \
-  --level=L4 \
-  --snapshot=./acctcode.snap.gz \
-  --datadir=./l4state \
   --wallet=<your-iotx-address>
 ```
 
@@ -125,15 +118,12 @@ go build -o ioswarm-agent .
   --coordinator=delegate.goodwillclaw.com:443 \
   --agent-id=<your-id> \
   --api-key=iosw_<your-key> \
-  --level=L4 \
-  --snapshot=./acctcode.snap.gz \
-  --datadir=./l4state \
   --wallet=<your-iotx-address>
 ```
 
-First boot loads the snapshot (~10s). Subsequent restarts recover from local state in <200ms.
+Default level is L3 (full EVM execution). For L4 (independent state), add `--level=L4 --snapshot=./acctcode.snap.gz --datadir=./l4state`.
 
-### 4. Generate a wallet (optional)
+### 3. Generate a wallet (optional)
 
 If you need a new wallet for reward payouts:
 
@@ -145,16 +135,13 @@ docker run --rm raullen/ioswarm-agent:latest keygen
 ./ioswarm-agent keygen -out my-agent.key
 ```
 
-### 5. Run as a background service (non-Docker)
+### 4. Run as a background service (non-Docker)
 
 ```bash
 nohup ./ioswarm-agent \
   --coordinator=delegate.goodwillclaw.com:443 \
   --agent-id=<your-id> \
   --api-key=iosw_<your-key> \
-  --level=L4 \
-  --snapshot=./acctcode.snap.gz \
-  --datadir=./l4state \
   --wallet=<your-iotx-address> > agent.log 2>&1 &
 ```
 
