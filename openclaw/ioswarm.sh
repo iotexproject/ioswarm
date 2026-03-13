@@ -147,7 +147,7 @@ cmd_setup() {
     if [ -f "${AGENT_DIR}/delegate.addr" ]; then
         delegate_addr=$(cat "${AGENT_DIR}/delegate.addr")
     else
-        delegate_addr="127.0.0.1:14689"
+        delegate_addr="delegate.goodwillclaw.com:443"
     fi
 
     local wallet_addr

@@ -4,7 +4,7 @@ set -euo pipefail
 # IOSwarm Agent Installer
 # Usage: curl -sSL https://ioswarm.io/install.sh | bash
 
-REPO="machinefi/ioswarm-agent"
+REPO="iotexproject/ioswarm-agent"
 BINARY="ioswarm-agent"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/ioswarm"
