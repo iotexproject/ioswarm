@@ -41,8 +41,9 @@ Want to add your delegate? See the [Coordinator README](https://github.com/iotex
 
 ### Prerequisites
 
-- Docker **or** Go 1.23+
+- Any 64-bit machine (Linux, macOS, Windows WSL2)
 - ~2 GB RAM, ~2 GB disk
+- Optional: Docker (for containerized deployment) or Go 1.23+ (to build from source)
 
 ### 1. Download the state snapshot
 
