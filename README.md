@@ -12,7 +12,7 @@
 
 <p align="center">
   <b>Distributed execution layer for IoTeX delegates, powered by autonomous agent swarms.</b><br/>
-  Run an agent on a $5/mo VPS — validate transactions, maintain chain state, build blocks, earn IOTX.
+  Run an agent on commodity hardware — validate transactions, maintain chain state, build blocks, earn IOTX.
 </p>
 
 ---
