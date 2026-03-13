@@ -2,7 +2,7 @@
 
 IOSwarm agent node for the IoTeX network. Connects to a delegate's coordinator, receives pending transactions, validates them at configurable levels (L1-L4), and earns IOTX rewards.
 
-**Production status** (March 2026): L4 agents running on IoTeX mainnet with 99.5% shadow accuracy, on-chain reward settlement verified end-to-end.
+**Production status** (March 2026): L4 agents running on IoTeX mainnet with **100% shadow accuracy**, on-chain reward settlement verified end-to-end.
 
 ## Architecture
 
@@ -33,27 +33,25 @@ IOSwarm agent node for the IoTeX network. Connects to a delegate's coordinator, 
 
 ### Prerequisites
 
-- ~2 GB RAM (for L4 state store)
-- ~2 GB disk (state store grows over time)
-- Stable internet connection to delegate
-- Docker **or** Go 1.23+ (for building from source)
+- Docker **or** Go 1.23+
+- ~2 GB RAM, ~2 GB disk
 
-### 1. Get your credentials
+### 1. Download the state snapshot
+
+```bash
+curl -O https://ts.iotex.me/acctcode.snap.gz    # ~209 MB, one-time download
+```
+
+This is a compressed copy of the IoTeX mainnet state. You only need it for the first boot — after that the agent syncs incrementally.
+
+> **Snapshot server:** https://ts.iotex.me — updated daily, served via Cloudflare CDN.
+
+### 2. Get your credentials
 
 Contact the delegate operator to get:
 - **Coordinator address** (e.g., `178.62.196.98:14689`)
 - **Agent ID** (e.g., `agent-01`)
 - **API key** (`iosw_...` format)
-
-### 2. Download the bootstrap snapshot
-
-L4 agents need a one-time state snapshot (~209 MB):
-
-```bash
-curl -O https://ts.iotex.me/acctcode.snap.gz
-```
-
-After first boot, the agent stores state locally and syncs incrementally. You won't need the snapshot again.
 
 ### 3. Start the agent
 
@@ -147,7 +145,7 @@ Or use `systemd` (Linux) / `launchd` (macOS) for auto-restart.
 | L1 | Signature verification | None | — |
 | L2 | + Nonce/balance checks | Coordinator-provided snapshots | — |
 | L3 | + Full EVM execution | Coordinator-provided state (via SimulateAccessList) | 100% |
-| **L4** | **Independent EVM execution** | **Local full state via snapshot + diffs** | **99.5%** |
+| **L4** | **Independent EVM execution** | **Local full state via snapshot + diffs** | **100%** |
 
 ### L1 — Signature Verification
 - Checks transaction raw bytes >= 65 bytes
