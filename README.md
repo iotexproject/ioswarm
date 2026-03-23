@@ -85,6 +85,8 @@ Contact the delegate operator to get:
 Works on Linux (amd64), macOS (Apple Silicon & Intel), and Windows (WSL2). No Go toolchain needed.
 
 ```bash
+docker pull raullen/ioswarm-agent:latest
+
 docker run -d --name ioswarm-agent --restart=always \
   raullen/ioswarm-agent:latest \
   --coordinator=delegate.goodwillclaw.com:443 \
@@ -92,6 +94,8 @@ docker run -d --name ioswarm-agent --restart=always \
   --api-key=iosw_<your-key> \
   --wallet=<your-iotx-address>
 ```
+
+To upgrade: `docker pull raullen/ioswarm-agent:latest && docker restart ioswarm-agent`
 
 Check logs:
 ```bash
