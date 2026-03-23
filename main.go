@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -57,6 +58,9 @@ func main() {
 		case "service":
 			runService(os.Args[2:])
 			return
+		case "rewards":
+			runRewards(os.Args[2:])
+			return
 		case "llm":
 			// "llm setup" subcommand for OAuth login
 			if len(os.Args) > 2 && os.Args[2] == "setup" {
@@ -102,6 +106,9 @@ func main() {
 		*dataDir = os.Getenv("IOSWARM_DATADIR")
 	}
 
+	// Check for updates (non-blocking)
+	checkForUpdate(version)
+
 	// LLM-only mode: no coordinator needed
 	runMode := strings.ToLower(*mode)
 	if runMode == "llm" {
@@ -139,17 +146,6 @@ func main() {
 		zap.String("mode", *mode),
 		zap.Bool("auth", *apiKey != ""))
 
-	// Auto-enable TLS when connecting to port 443
-	if !*useTLS && *tlsCert == "" && strings.HasSuffix(*coordinator, ":443") {
-		*useTLS = true
-	}
-
-	conn, err := dialCoordinator(*coordinator, *agentID, *apiKey, *tlsCert, *useTLS)
-	if err != nil {
-		logger.Fatal("failed to connect to coordinator", zap.Error(err))
-	}
-	defer conn.Close()
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -162,62 +158,30 @@ func main() {
 		cancel()
 	}()
 
-	// Register with coordinator
-	resp, err := register(ctx, conn, *agentID, *level, *region, *wallet, logger)
-	if err != nil {
-		logger.Fatal("registration failed", zap.Error(err))
+	// Multi-delegate support: split comma-separated coordinators
+	coordinators := strings.Split(*coordinator, ",")
+	for i := range coordinators {
+		coordinators[i] = strings.TrimSpace(coordinators[i])
 	}
 
-	// Start heartbeat loop in background
-	hbInterval := time.Duration(resp.HeartbeatIntervalSec) * time.Second
-	if hbInterval < time.Second {
-		hbInterval = 10 * time.Second
-	}
-	go heartbeatLoop(ctx, conn, *agentID, hbInterval, logger)
+	var wg sync.WaitGroup
+	for idx, coord := range coordinators {
+		coord := coord
+		wlog := logger.With(zap.String("coordinator", coord), zap.Int("worker", idx))
 
-	// L4: initialize state store and sync
-	var stateStore *StateStore
-	if strings.ToUpper(*level) == "L4" {
-		dbPath := *dataDir + "/state.db"
-		var err error
-		stateStore, err = OpenStateStore(dbPath, logger)
-		if err != nil {
-			logger.Fatal("failed to open state store", zap.Error(err))
-		}
-		defer stateStore.Close()
-
-		// Load snapshot if provided and store is empty
-		if *snapshot != "" && stateStore.Height() == 0 {
-			h, n, err := LoadSnapshot(*snapshot, stateStore, logger)
-			if err != nil {
-				logger.Fatal("failed to load snapshot", zap.Error(err))
-			}
-			logger.Info("loaded snapshot",
-				zap.Uint64("height", h),
-				zap.Int("entries", n))
-		}
-
-		sync := NewStateSync(stateStore, conn, *agentID, logger)
-		sync.Start(ctx)
-		defer sync.Stop()
-
-		// Wait for first diff before processing tasks (with 60s timeout)
-		logger.Info("waiting for state sync to become ready...")
-		readyCtx, readyCancel := context.WithTimeout(ctx, 60*time.Second)
-		if err := sync.WaitReady(readyCtx); err != nil {
-			readyCancel()
-			logger.Fatal("state sync did not become ready", zap.Error(err))
-		}
-		readyCancel()
-		logger.Info("state sync ready, starting task processing",
-			zap.Uint64("height", stateStore.Height()))
-
-		// Store reference for L4 validator (atomic store before streamTasks)
-		activeStateStore.Store(stateStore)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			runWorker(ctx, coord, *agentID, *apiKey, *level, *region, *wallet,
+				*tlsCert, *useTLS, *dataDir, *snapshot, idx, wlog)
+		}()
 	}
 
-	// Stream and process tasks
-	streamTasks(ctx, conn, *agentID, *level, *region, *wallet, logger)
+	if len(coordinators) > 1 {
+		logger.Info("multi-delegate mode", zap.Int("coordinators", len(coordinators)))
+	}
+
+	wg.Wait()
 }
 
 func register(ctx context.Context, conn *grpc.ClientConn, agentID, level, region, wallet string, logger *zap.Logger) (*registerResponse, error) {
