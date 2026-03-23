@@ -138,7 +138,29 @@ go build -o ioswarm-agent .
 
 Default level is L3 (full EVM execution). For L4 (independent state), add `--level=L4 --snapshot=./acctcode.snap.gz --datadir=./l4state`.
 
-### 3. Generate a wallet (optional)
+**Multi-delegate mode**: Connect to multiple coordinators simultaneously to earn rewards from several delegates:
+
+```bash
+./ioswarm-agent \
+  --coordinator=delegate1.com:443,delegate2.com:443 \
+  --api-key=iosw_key1,iosw_key2 \
+  --agent-id=my-agent \
+  --wallet=<your-iotx-address>
+```
+
+Each coordinator runs as an independent worker goroutine. Rewards accumulate from all delegates.
+
+### 3. Check rewards
+
+```bash
+./ioswarm-agent rewards \
+  --coordinator=http://delegate.goodwillclaw.com:14690 \
+  --agent-id=<your-id>
+```
+
+Displays per-epoch reward history with accuracy, rank, and totals.
+
+### 4. Generate a wallet (optional)
 
 If you need a new wallet for reward payouts:
 
@@ -150,7 +172,7 @@ docker run --rm raullen/ioswarm-agent:latest keygen
 ./ioswarm-agent keygen -out my-agent.key
 ```
 
-### 4. Run as a background service (non-Docker)
+### 5. Run as a background service (non-Docker)
 
 ```bash
 nohup ./ioswarm-agent \
@@ -166,9 +188,9 @@ Or use `systemd` (Linux) / `launchd` (macOS) for auto-restart.
 
 | Flag | Env Var | Default | Description |
 |------|---------|---------|-------------|
-| `--coordinator` | `IOSWARM_COORDINATOR` | `127.0.0.1:14689` | Coordinator gRPC address |
+| `--coordinator` | `IOSWARM_COORDINATOR` | `127.0.0.1:14689` | Coordinator gRPC address (comma-separated for multi-delegate) |
 | `--agent-id` | `IOSWARM_AGENT_ID` | *(required)* | Unique agent identifier |
-| `--api-key` | `IOSWARM_API_KEY` | | HMAC authentication key |
+| `--api-key` | `IOSWARM_API_KEY` | | HMAC authentication key (comma-separated for multi-delegate) |
 | `--level` | | `L3` | Validation level: `L1`, `L2`, `L3`, `L4` |
 | `--snapshot` | | | Path to IOSWSNAP file for L4 bootstrap |
 | `--datadir` | `IOSWARM_DATADIR` | `/tmp/ioswarm` | Directory for L4 BoltDB state |
@@ -252,6 +274,21 @@ trailer: count(uint64) + sha256(32 bytes) + end_magic("SNAPEND\0")
 Gzip-compressed binary with SHA-256 integrity check. The export tool (`l4baseline`) is in the [iotex-core](https://github.com/iotexproject/iotex-core/tree/ioswarm-v2.3.5/ioswarm/cmd/l4baseline) repo.
 
 ## Subcommands
+
+### `rewards` — View Reward History
+
+Query the coordinator for your per-epoch reward history.
+
+```bash
+./ioswarm-agent rewards \
+  --coordinator=http://delegate.goodwillclaw.com:14690 \
+  --agent-id=my-agent
+```
+
+| Flag | Env Var | Description |
+|------|---------|-------------|
+| `--coordinator` | `IOSWARM_COORDINATOR_HTTP` | Coordinator HTTP API URL (e.g., `http://host:14690`) |
+| `--agent-id` | `IOSWARM_AGENT_ID` | Agent ID to query |
 
 ### `claim` — Claim Rewards
 
